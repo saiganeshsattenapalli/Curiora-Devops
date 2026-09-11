@@ -4,3 +4,8 @@ __pycache__/
 .env
 *.csv
 *.db
+*.pyc
+.pytest_cache/
+.huggingface/
+.cache/
+models/
