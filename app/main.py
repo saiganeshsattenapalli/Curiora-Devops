@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers.incidents import router as incidents_router
-
+from app.routers.chat import router as chat_router
 
 app = FastAPI(title="Curiora-DevOps")
 app.add_middleware(
@@ -15,3 +15,4 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 app.include_router(incidents_router)
+app.include_router(chat_router)

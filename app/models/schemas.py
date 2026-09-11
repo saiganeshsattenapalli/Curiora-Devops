@@ -23,3 +23,16 @@ class Diagnosis(BaseModel):
 class IncidentResponse(Diagnosis):
     status: Literal["diagnosed"] = "diagnosed"
     incident_id: UUID
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+    incident_context: str | None = None
+
+
+class ChatResponse(BaseModel):
+    response: str
+
+
+class VisionResponse(BaseModel):
+    extracted_logs: str
