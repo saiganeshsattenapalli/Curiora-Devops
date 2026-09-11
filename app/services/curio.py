@@ -10,6 +10,7 @@ from app.services.github_service import GitHubFinalizationError, GitHubService
 from app.services.model_router import ModelRouter
 from app.services.patch_service import PatchService
 from app.services.reviewer import Reviewer
+from app.services.telegram import TelegramNotifier
 from app.services.test_runner import TestRunner
 
 
@@ -20,12 +21,14 @@ class Curio:
         patch_service: PatchService | None = None,
         test_runner: TestRunner | None = None,
         reviewer: Reviewer | None = None,
+        telegram: TelegramNotifier | None = None,
     ) -> None:
         self.model_router = model_router if model_router is not None else ModelRouter()
         self.github_service = github_service if github_service is not None else GitHubService()
         self.patch_service = patch_service if patch_service is not None else PatchService()
         self.test_runner = test_runner if test_runner is not None else TestRunner()
         self.reviewer = reviewer if reviewer is not None else Reviewer()
+        self.telegram = telegram if telegram is not None else TelegramNotifier()
 
     async def diagnose_incident(self, incident: IncidentRequest) -> IncidentResponse:
         request = TextDiagnosisRequest(
@@ -54,6 +57,10 @@ class Curio:
         result.incident_id = diagnosed.incident_id
         diagnosis = Diagnosis.model_validate(diagnosed.model_dump())
         result.diagnosis = diagnosis
+        self.telegram.notify_incident_detected(
+            result.incident_id, incident.repository, incident.source,
+        )
+        self.telegram.notify_diagnosis_completed(result.incident_id, diagnosis)
         if not diagnosis.safe_to_autofix:
             result.status = "unsafe"
             return result
@@ -79,15 +86,18 @@ class Curio:
                 if should_stop():
                     return result
                 result.status = "patch_failed"
+                self.telegram.notify_autofix_started(result.incident_id, incident.repository)
                 result.patch = self.patch_service.apply_patch(diagnosis, workspace)
                 if not result.patch.success or should_stop():
                     return result
+                self.telegram.notify_patch_validated(result.incident_id, result.patch)
                 result.status = "tests_failed"
                 result.tests = self.test_runner.run(workspace)
                 if not result.tests.passed or result.tests.return_code != 0 or should_stop():
                     return result
                 result.status = "review_rejected"
                 result.review = self.reviewer.review(diagnosis, result.patch, result.tests)
+                self.telegram.notify_review_result(result.incident_id, result.review)
                 if not result.review.approved or should_stop():
                     return result
                 result.status = "finalization_failed"
@@ -96,6 +106,11 @@ class Curio:
                     tests=result.tests, review=result.review,
                 )
                 result.status = "completed"
+                self.telegram.notify_pr_created(result.incident_id, result.pull_request)
+                self.telegram.notify_final_success(
+                    result.incident_id, incident.repository, diagnosis,
+                    result.patch, result.tests, result.review, result.pull_request,
+                )
             except GitHubFinalizationError as exc:
                 result.error = str(exc)
                 result.commit_sha = exc.commit_sha

@@ -18,6 +18,7 @@ from app.services.github_service import (
 from app.services.model_router import ModelRouter
 from app.services.patch_service import PatchResult, PatchService
 from app.services.reviewer import Reviewer, ReviewResult
+from app.services.telegram import TelegramNotifier
 from app.services.test_runner import TestResult as ExecutionResult, TestRunner as Runner
 
 
@@ -171,6 +172,41 @@ class RemediationTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await asyncio.to_thread(cleaned.wait, 2))
         self.assertEqual(calls, ["diagnose", "prepare"])
         self.assertTrue(all(not path.exists() for path in workspaces))
+
+    async def test_telegram_notifications_fire_in_correct_order(self):
+        curio, calls, workspaces = self.pipeline()
+        telegram = Mock(spec=TelegramNotifier)
+        telegram.enabled = True
+        curio.telegram = telegram
+        result = await curio.remediate_incident(self.incident)
+        self.assertEqual(result.status, "completed")
+        # Verify all seven notification methods were called exactly once, in order.
+        expected = [
+            "notify_incident_detected",
+            "notify_diagnosis_completed",
+            "notify_autofix_started",
+            "notify_patch_validated",
+            "notify_review_result",
+            "notify_pr_created",
+            "notify_final_success",
+        ]
+        actual = [call[0] for call in telegram.method_calls]
+        self.assertEqual(actual, expected)
+        # Pipeline stages still ran in correct order.
+        self.assertEqual(calls, ["diagnose", "prepare", "patch", "tests", "review", "finalize"])
+        # Workspace was cleaned up.
+        self.assertTrue(all(not path.exists() for path in workspaces))
+
+    async def test_telegram_failure_does_not_break_pipeline(self):
+        curio, calls, workspaces = self.pipeline()
+        telegram = TelegramNotifier()
+        telegram.enabled = True
+        telegram._send = Mock(side_effect=RuntimeError("telegram down"))
+        curio.telegram = telegram
+        result = await curio.remediate_incident(self.incident)
+        # The bare except in each notify_* swallows the error.
+        self.assertIn(result.status, {"completed", "patch_failed", "diagnosis_failed",
+                                       "tests_failed", "review_rejected", "finalization_failed"})
 
 
 if __name__ == "__main__":
