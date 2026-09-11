@@ -1,5 +1,7 @@
 import json
+import keyword
 import logging
+import re
 from dataclasses import asdict
 from typing import Any
 
@@ -43,10 +45,35 @@ class CurioTextProvider:
             data = json.loads(output, object_pairs_hook=_unique_object)
             if not isinstance(data, dict) or set(data) != set(Diagnosis.model_fields):
                 raise ValueError("Expected exactly the diagnosis fields")
-            return Diagnosis.model_validate(data, strict=True)
+            diagnosis = Diagnosis.model_validate(data, strict=True)
+            return self._normalize_missing_dependency(request.logs, diagnosis)
         except (ValueError, TypeError, RecursionError):
             logger.warning("Text inference returned an invalid diagnosis")
             return self._safe("The model did not return a valid diagnosis JSON object.")
+
+    @staticmethod
+    def _normalize_missing_dependency(logs: str, diagnosis: Diagnosis) -> Diagnosis:
+        if diagnosis.confidence < 0.8 or diagnosis.error_type.strip().lower().replace(" ", "_") not in {
+            "missing_dependency", "modulenotfounderror",
+        }:
+            return diagnosis
+        # Require one exact error line; never extract a package from model commands.
+        if logs.count("ModuleNotFoundError:") != 1:
+            return diagnosis
+        for line in logs.splitlines():
+            match = re.fullmatch(
+                r"ModuleNotFoundError: No module named (['\"])([A-Za-z](?:[A-Za-z0-9_]*[A-Za-z0-9])?)\1",
+                line,
+            )
+            if match and not keyword.iskeyword(match[2]):
+                # A top-level Python identifier within PatchService's package syntax.
+                return diagnosis.model_copy(update={
+                    "error_type": "missing_dependency",
+                    "affected_files": [],
+                    "proposed_fix": f"Add {match[2]} to requirements.txt.",
+                    "safe_to_autofix": True,
+                })
+        return diagnosis
 
     @staticmethod
     def _messages(request: TextDiagnosisRequest) -> list[dict[str, str]]:
