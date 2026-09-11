@@ -27,12 +27,15 @@ class IncidentResponse(Diagnosis):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
-    incident_context: str | None = None
+    conversation_id: str | None = None
 
 
 class ChatResponse(BaseModel):
-    response: str
+    conversation_id: str
+    message: str
 
 
 class VisionResponse(BaseModel):
     extracted_logs: str
+    summary: str
+    suggested_action: str
